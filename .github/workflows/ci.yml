@@ -1,0 +1,71 @@
+name: ci
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
+jobs:
+  build-test-lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Install the project
+        run: uv sync --locked --all-extras --dev
+      - name: Run tests
+        run: uv run pytest tests
+
+  build-docker:
+    runs-on: ubuntu-latest
+    needs: build-test-lint
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate image tag
+        id: tag
+        run: |
+          IMAGE_NAME_LOWER=$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')
+          echo "image_tag=${IMAGE_NAME_LOWER}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        run: docker build -t ${{ steps.tag.outputs.image_tag }} .
+
+  # deploy-docker:
+  #   runs-on: ubuntu-latest
+  #   needs: build-docker
+  #   if: github.ref == 'refs/heads/main'
+  #   permissions:
+  #     packages: write
+  #   steps:
+  #     - name: Log in to GHCR
+  #       uses: docker/login-action@v3
+  #       with:
+  #         registry: ghcr.io
+  #         username: ${{ github.actor }}
+  #         password: ${{ secrets.GITHUB_TOKEN }}
+
+  #     - name: Push image
+  #       run: docker push ${{ needs.build-docker.outputs.image_tag }}
+  terraform-validate:
+    runs-on: ubuntu-latest
+    needs: build-test-lint
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+      - name: Terraform Init
+        run: terraform -chdir=terraform init -backend=false
+      - name: Terraform Validate
+        run: terraform -chdir=terraform validate
